@@ -1,96 +1,143 @@
-import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
-import { corsHeaders } from '../_shared/cors.ts'; // Assuming you have a shared CORS setup
+import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { Resend } from "npm:resend@2.0.0";
+// Debug log all available environment variables
+console.log("Available environment variables:", Deno.env.toObject());
 
-// IMPORTANT: Set these secrets in your Supabase project dashboard:
-// `RESEND_API_KEY`: Your Resend API key (e.g., re_...)
-// `RESEND_FROM_EMAIL`: The verified email address you send from (e.g., noreply@yourdomain.com)
+// Load environment variables with multiple fallbacks
+let resendApiKey = Deno.env.get("RESEND_API_KEY") || 
+                  Deno.env.get("RESEND_API_KEY\r") || // Handle Windows line endings
+                  Deno.env.get("RESEND_API_KEY\n") || // Handle Unix line endings
+                  Deno.env.get("RESEND_API_KEY\r\n"); // Handle CRLF
 
-const RESEND_API_URL = 'https://api.resend.com/emails';
-
-interface EmailPayload {
-  to: string | string[];
-  subject: string;
-  html: string;
+if (!resendApiKey) {
+  console.error("RESEND_API_KEY not found in environment variables. Available keys:", 
+    Array.from(Deno.env.keys()));
+  throw new Error("Email service configuration error - missing API key. Please ensure RESEND_API_KEY is set in your environment variables.");
 }
 
-serve(async (req: Request) => {
+// Clean up potential line ending artifacts
+resendApiKey = resendApiKey.trim();
+
+let resend;
+try {
+  resend = new Resend(resendApiKey);
+  console.log("Resend client initialized successfully");
+} catch (err) {
+  console.error("Failed to initialize Resend client:", err);
+  throw new Error("Email service configuration error - invalid API key");
+}
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type"
+};
+const handler = async (req: Request): Promise<Response> => {
+  // Verify request URL
+  const url = new URL(req.url);
+  if (!url.pathname.endsWith('/send-email')) {
+    return new Response(JSON.stringify({ error: "Invalid endpoint" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json", ...corsHeaders }
+    });
+  }
+
   // Handle CORS preflight requests
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
   }
-
   try {
-    // 1. Retrieve secrets
-    const resendApiKey = Deno.env.get('RESEND_API_KEY');
-    const fromEmail = Deno.env.get('RESEND_FROM_EMAIL');
-
-    if (!resendApiKey || !fromEmail) {
-      console.error('Missing RESEND_API_KEY or RESEND_FROM_EMAIL environment variables');
-      return new Response(JSON.stringify({ error: 'Email service configuration error.' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // 2. Parse request body
-    let payload: EmailPayload;
+    const { to, subject, html, from = "Contact System <onboarding@resend.dev>", replyTo, text, metadata = {}, tags = [], trackOpens = true, trackClicks = true } = await req.json();
+    console.log(`Sending email to ${Array.isArray(to) ? to.join(", ") : to}`);
+    // Generate a unique ID for this email
+    const emailId = crypto.randomUUID();
+    // Add tracking pixel if trackOpens is enabled
+    const trackingPixel = trackOpens ? `<img src="https://yuyntfqmarmjwolrwqkf.functions.supabase.co/track-email-events?event=open&email=${emailId}" width="1" height="1" />` : '';
+    // Combine the original HTML with the tracking pixel
+    const htmlWithTracking = `${html}${trackingPixel}`;
+    // Add timeout for email sending
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
+    const emailResponse = await resend.emails.send({
+      signal: controller.signal,
+      from,
+      to,
+      subject,
+      html: htmlWithTracking,
+      text,
+      reply_to: replyTo,
+      // Add analytics tracking
+      tags: [
+        {
+          name: "category",
+          value: "crm_email"
+        },
+        ...Array.isArray(tags) ? tags : []
+      ],
+      // Add metadata for better analytics
+      metadata: {
+        email_id: emailId,
+        sent_timestamp: new Date().toISOString(),
+        ...metadata
+      }
+    });
+    console.log("Email sent successfully:", emailResponse);
+    // Store the initial send event
     try {
-      payload = await req.json();
-    } catch (e) {
-      return new Response(JSON.stringify({ error: 'Invalid request body. Expected JSON.' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      const trackResponse = await fetch('https://yuyntfqmarmjwolrwqkf.functions.supabase.co/track-email-events', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          type: 'send',
+          data: {
+            email_id: emailId,
+            recipient: Array.isArray(to) ? to[0] : to,
+            timestamp: new Date().toISOString()
+          }
+        })
       });
+      if (!trackResponse.ok) {
+        console.error('Failed to track send event:', await trackResponse.text());
+      }
+    } catch (trackError) {
+      console.error('Error tracking send event:', trackError);
     }
-
-    const { to, subject, html } = payload;
-
-    if (!to || !subject || !html) {
-      return new Response(JSON.stringify({ error: 'Missing required fields: to, subject, html' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    console.log(`Sending email via Edge Function to: ${Array.isArray(to) ? to.join(', ') : to}`);
-    console.log(`Subject: ${subject}`);
-
-    // 3. Call Resend API
-    const resendResponse = await fetch(RESEND_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${resendApiKey}`,
-      },
-      body: JSON.stringify({
-        from: fromEmail,
-        to: to,
-        subject: subject,
-        html: html,
-      }),
-    });
-
-    const resendData = await resendResponse.json();
-
-    // 4. Handle Resend API response
-    if (!resendResponse.ok) {
-      console.error('Resend API Error:', resendData);
-      throw new Error(resendData.message || 'Failed to send email via Resend API');
-    }
-
-    console.log('Email sent successfully via Resend Edge Function:', resendData);
-
-    // 5. Return success response
-    return new Response(JSON.stringify({ success: true, message: 'Email sent successfully.', resend_id: resendData.id }), {
+    return new Response(JSON.stringify(emailResponse), {
       status: 200,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders
+      }
     });
-
-  } catch (error: any) {
-    console.error('Error in send-email Edge Function:', error);
-    return new Response(JSON.stringify({ error: error.message || 'Internal Server Error' }), {
+  } catch (error: unknown) {
+    const err = error as Error;
+    console.error("Error in send-email function:", {
+      message: err.message,
+      stack: err.stack,
+      name: err.name
+    });
+    
+    let status = 500;
+    let errorMessage = err.message;
+    
+    if (err.name === 'AbortError') {
+      status = 504;
+      errorMessage = "Email service timeout";
+    } else if (err.message.includes('Failed to fetch')) {
+      status = 502;
+      errorMessage = "Email service unavailable";
+    }
+    
+    return new Response(JSON.stringify({
+      error: errorMessage
+    }), {
       status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      headers: {
+        "Content-Type": "application/json",
+        ...corsHeaders
+      }
     });
   }
-});
+};
+serve(handler);

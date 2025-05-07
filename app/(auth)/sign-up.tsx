@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Image, ScrollView, ActivityIndicator, Alert } from 'react-native'; // Added Alert
 import { router } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/lib/supabase';
 import { Camera, Upload, GraduationCap, User } from 'lucide-react-native';
@@ -21,53 +20,8 @@ export default function SignUp() {
   const [education, setEducation] = useState('');
   const [hourlyRate, setHourlyRate] = useState('');
   const [bio, setBio] = useState('');
-  const [avatar, setAvatar] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // ... (keep pickImage and uploadAvatar functions)
-  const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.5,
-    });
-
-    if (!result.canceled) {
-      setAvatar(result.assets[0].uri);
-    }
-  };
-
-  const uploadAvatar = async (userId: string, uri: string) => {
-    try {
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      const fileExt = uri.split('.').pop();
-      const fileName = `${userId}.${fileExt}`;
-      const filePath = `${userId}/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filePath, blob);
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(filePath);
-
-      await supabase
-        .from('profiles')
-        .update({ avatar_url: publicUrl })
-        .eq('id', userId);
-
-      return publicUrl;
-    } catch (error) {
-      console.error('Error uploading avatar:', error);
-      throw error;
-    }
-  };
 
 
   const handleSignUp = async () => {
@@ -87,7 +41,7 @@ export default function SignUp() {
       }
       // --- End Input validation ---
 
-      // --- Supabase Auth Sign Up (keep existing) ---
+      // Create user with auto-confirmation
       const { data: { user }, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
@@ -96,18 +50,17 @@ export default function SignUp() {
             full_name: name,
             role: role,
           },
-        },
+          emailRedirectTo: `${process.env.EXPO_PUBLIC_SUPABASE_URL}/auth/v1/callback`
+        }
       });
-      
-      console.log('SignUp Response:', { user, signUpError });
+
       if (signUpError) {
         console.error('SignUp Error Details:', signUpError);
         throw signUpError;
       }
-      // --- End Supabase Auth Sign Up ---
 
       if (user) {
-        // --- Update Profile (keep existing) ---
+        // Update profile
         const profileData = {
           education: role === 'tutor' ? education : null,
           hourly_rate: role === 'tutor' ? parseFloat(hourlyRate) : null,
@@ -118,13 +71,17 @@ export default function SignUp() {
           .update(profileData)
           .eq('id', user.id);
         if (profileError) throw profileError;
-        // --- End Update Profile ---
 
-        // --- Upload Avatar (keep existing) ---
-        if (avatar) {
-          await uploadAvatar(user.id, avatar);
+        // Force confirm by signing in immediately
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password
+        });
+        if (signInError) {
+          console.error('SignIn Error:', signInError);
+          throw new Error("Failed to confirm user");
         }
-        // --- End Upload Avatar ---
+        // --- End Update Profile ---
 
         // --- Send Email Notifications via Supabase Edge Function ---
         console.log('Invoking send-email function for admin and user notifications...');
@@ -141,35 +98,40 @@ export default function SignUp() {
           html: templates.welcomeUser(name, role),
         };
 
-        // Invoke the function for both emails (can run in parallel)
-        // We use Promise.allSettled to ensure both attempts complete, even if one fails
-        const functionInvokePromises = [
-          supabase.functions.invoke('send-email', { body: adminEmailPayload }),
-          supabase.functions.invoke('send-email', { body: userEmailPayload })
-        ];
+        // Try sending emails but don't block signup if it fails
+        try {
+          const sendEmail = async (payload: any) => {
+            const url = 'https://yuyntfqmarmjwolrwqkf.supabase.co/functions/v1/send-email';
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY}`
+              },
+              body: JSON.stringify(payload)
+            });
+            return response.json();
+          };
 
-        const results = await Promise.allSettled(functionInvokePromises);
-
-        // Log results/errors from function invocations
-        results.forEach((result, index) => {
-          const recipient = index === 0 ? 'admin' : 'user';
-          if (result.status === 'rejected') {
-            console.error(`Error invoking send-email function for ${recipient}:`, result.reason);
-            // Optionally alert the user, but sign-up itself succeeded
-            // Alert.alert('Notification Issue', `Could not send ${recipient} notification email. Please contact support if needed.`);
-          } else {
-            // Check for errors returned *from* the function itself
-            if (result.value.error) {
-              console.error(`Error returned from send-email function for ${recipient}:`, result.value.error);
-              // Alert.alert('Notification Issue', `Failed to send ${recipient} notification email: ${result.value.error.message}`);
-            } else if (result.value.data?.success === false) {
-               console.error(`send-email function reported failure for ${recipient}:`, result.value.data.error);
-               // Alert.alert('Notification Issue', `Failed to send ${recipient} notification email: ${result.value.data.error}`);
-            } else {
-              console.log(`send-email function successfully invoked for ${recipient}. Resend ID: ${result.value.data?.resend_id}`);
-            }
-          }
-        });
+          // Run in background without blocking
+          Promise.allSettled([
+            sendEmail(adminEmailPayload),
+            sendEmail(userEmailPayload)
+          ]).then(results => {
+            results.forEach((result, index) => {
+              const recipient = index === 0 ? 'admin' : 'user';
+              if (result.status === 'rejected') {
+                console.error(`Email send failed for ${recipient}:`, result.reason);
+              } else if (!result.value.success) {
+                console.error(`Email send failed for ${recipient}:`, result.value.error);
+              } else {
+                console.log(`Email sent to ${recipient}`);
+              }
+            });
+          });
+        } catch (emailError) {
+          console.error('Email sending failed:', emailError);
+        }
         // --- End Send Email Notifications ---
 
         // --- Remove old Supabase function call for admin notification ---
@@ -179,9 +141,12 @@ export default function SignUp() {
         // } catch (notificationError) { console.error(...); }
         // --- End Remove old call ---
 
-        // Navigate to main app
-        router.replace("/(tabs)");
-
+        // Show success message and redirect to home
+        Alert.alert(
+          'Account Created',
+          'Your account has been created successfully!'
+        );
+        router.replace('/(tabs)');
       } else {
         // Handle case where user is null after signup (should not happen ideally)
         throw new Error("Sign up completed but user data is missing.");
@@ -210,20 +175,6 @@ export default function SignUp() {
       </View>
 
       <View style={styles.form}>
-        <TouchableOpacity style={styles.avatarContainer} onPress={pickImage}>
-          {avatar ? (
-            <Image source={{ uri: avatar }} style={styles.avatar} />
-          ) : (
-            <View style={styles.avatarPlaceholder}>
-              <Camera size={32} color="#64748B" />
-              <Text style={styles.avatarText}>Add Photo</Text>
-            </View>
-          )}
-          <View style={styles.uploadIcon}>
-            <Upload size={16} color="#FFFFFF" />
-          </View>
-        </TouchableOpacity>
-
         {error && (
           <View style={styles.errorContainer}>
             <Text style={styles.errorText}>{error}</Text>
@@ -425,41 +376,6 @@ const styles = StyleSheet.create({
   },
   roleTextSelected: {
     color: '#4F46E5',
-  },
-  avatarContainer: {
-    alignSelf: 'center',
-    marginBottom: 24,
-    position: 'relative',
-  },
-  avatar: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-  },
-  avatarPlaceholder: {
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    backgroundColor: '#F1F5F9',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  avatarText: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 14,
-    color: '#64748B',
-    marginTop: 8,
-  },
-  uploadIcon: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    backgroundColor: '#3B82F6',
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
   },
   errorContainer: {
     backgroundColor: '#FEF2F2',
