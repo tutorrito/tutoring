@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Image } from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, ActivityIndicator, KeyboardAvoidingView, Platform, Alert, Image, Linking } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/hooks/useAuth';
 import { Database } from '@/types/supabase';
-import { ArrowLeft, Send } from 'lucide-react-native';
+import { ArrowLeft, Send, Paperclip, XCircle } from 'lucide-react-native';
+import * as DocumentPicker from 'expo-document-picker';
 
 type ProfileForMessage = Pick<Database['public']['Tables']['profiles']['Row'], 'full_name' | 'id'> & {
   avatar_public_url?: string | null;
@@ -26,7 +27,34 @@ export default function ChatScreen() {
   const [newMessage, setNewMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<DocumentPicker.DocumentPickerResult | null>(null);
   const flatListRef = useRef<FlatList>(null);
+
+  const handlePickDocument = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: '*/*', // Allow all file types
+        copyToCacheDirectory: true, // Recommended for uploads
+      });
+      console.log('[ChatScreen] handlePickDocument: DocumentPicker result:', JSON.stringify(result, null, 2));
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
+        if (asset.size && asset.size > 10 * 1024 * 1024) { // 10MB limit
+          Alert.alert('File too large', 'Please select a file smaller than 10MB.');
+          setSelectedFile(null);
+          return;
+        }
+        setSelectedFile(result);
+      } else {
+        setSelectedFile(null); // Clear if cancelled or no assets
+      }
+    } catch (error) {
+      console.error('[ChatScreen] handlePickDocument: Error picking document:', error);
+      Alert.alert('Error', 'Could not select file. Please try again.');
+      setSelectedFile(null);
+    }
+  };
 
   // Function to mark messages as read
   const markMessagesAsRead = useCallback(async (messageIdsToMarkRead: string[]) => {
@@ -277,23 +305,76 @@ export default function ChatScreen() {
 
 
   const handleSend = async () => {
-    console.log('[ChatScreen] handleSend: Attempting to send message. newMessage:', newMessage, 'user:', !!user, 'conversationId:', conversationId, 'sending:', sending);
-    if (!newMessage.trim() || !user || !conversationId || sending) {
-      console.log('[ChatScreen] handleSend: Conditions not met for sending.');
+    console.log('[ChatScreen] handleSend: Attempting to send. newMessage:', newMessage, 'selectedFile:', !!selectedFile, 'user:', !!user, 'conversationId:', conversationId, 'sending:', sending);
+    if ((!newMessage.trim() && !selectedFile) || !user || !conversationId || sending) {
+      console.log('[ChatScreen] handleSend: Conditions not met (no message content or file, or already sending).');
+      if (!selectedFile && !newMessage.trim()) {
+        Alert.alert("Empty Message", "Please type a message or select a file to send.");
+      }
       return;
     }
 
     setSending(true);
-    const messagePayload = {
+    let fileUrl: string | null = null;
+    let fileMimeType: string | undefined;
+
+    if (selectedFile && !selectedFile.canceled && selectedFile.assets && selectedFile.assets.length > 0) {
+      const asset = selectedFile.assets[0];
+      const fileName = asset.name;
+      const filePath = `${conversationId}/${Date.now()}_${fileName}`; // Removed 'public/' prefix
+      fileMimeType = asset.mimeType;
+
+      try {
+        // Expo's DocumentPicker provides a URI that needs to be fetched to get a Blob/File
+        const response = await fetch(asset.uri);
+        const blob = await response.blob();
+        
+        console.log(`[ChatScreen] handleSend: Uploading file: ${fileName} (Type: ${blob.type}, Size: ${blob.size}) to path: ${filePath}`);
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('upload') // Ensure this bucket exists and has appropriate policies
+          .upload(filePath, blob, {
+            contentType: blob.type, // Use the blob's type
+            upsert: false,
+          });
+
+        if (uploadError) {
+          throw uploadError;
+        }
+
+        console.log('[ChatScreen] handleSend: File uploaded successfully. Path:', uploadData.path);
+        const { data: publicUrlData } = supabase.storage
+          .from('upload')
+          .getPublicUrl(uploadData.path);
+        
+        fileUrl = publicUrlData.publicUrl;
+        console.log('[ChatScreen] handleSend: Public URL for file:', fileUrl);
+
+      } catch (e) {
+        console.error('[ChatScreen] handleSend: Error uploading file:', e);
+        Alert.alert('Upload Error', 'Could not upload your file. Please try again.');
+        setSending(false);
+        return;
+      }
+    }
+
+    const messagePayload: Database['public']['Tables']['messages']['Insert'] = {
       conversation_id: conversationId,
       sender_id: user.id,
-      content: newMessage.trim(),
+      content: newMessage.trim(), // Content can be empty if a file is attached
+      file_url: fileUrl,
     };
+    
+    // If there's no text content but there is a file, set content to indicate a file was sent
+    if (!messagePayload.content && fileUrl) {
+        messagePayload.content = (selectedFile && !selectedFile.canceled && selectedFile.assets && selectedFile.assets[0].name) || "File attached";
+    }
+
 
     const { data: insertedData, error } = await supabase
       .from('messages')
       .insert(messagePayload)
-      .select()
+      .select('*, profiles:sender_id(id, full_name)') // Fetch profile with it
       .single();
 
     setSending(false);
@@ -302,22 +383,23 @@ export default function ChatScreen() {
       console.error('[ChatScreen] handleSend: Error sending message:', error);
       Alert.alert('Error', 'Could not send your message. Please try again.');
     } else if (insertedData) {
-      console.log('[ChatScreen] handleSend: Message sent successfully and data retrieved.');
+      console.log('[ChatScreen] handleSend: Message sent successfully and data retrieved:', JSON.stringify(insertedData, null, 2));
       
-      // Simpler and more robust way to get sender's name for optimistic update
-      const senderFullName = user?.user_metadata?.full_name || 'You';
+      // Use profile data from insertedData if available, otherwise fallback
+      const profileForUI = insertedData.profiles || {
+        id: user!.id,
+        full_name: user?.user_metadata?.full_name || 'You',
+        avatar_public_url: null, // Will be updated by real-time if needed
+      };
       
       const messageForUI: Message = {
-        ...insertedData, // Contains id, content, created_at, sender_id, conversation_id, is_read (false from DB)
-        profiles: { // This is ProfileForMessage
-          id: user!.id, // user is confirmed non-null at the start of handleSend
-          full_name: senderFullName,
-          avatar_public_url: null, // Real-time subscription will fetch/update this
-        }
+        ...insertedData,
+        profiles: profileForUI as ProfileForMessage, // Cast to ensure type correctness
       };
 
       setMessages(prevMessages => [...prevMessages, messageForUI]);
       setNewMessage('');
+      setSelectedFile(null); // Clear selected file
 
       // ---- START: Add notification logic ----
       if (conversationDetails && user) {
@@ -373,6 +455,7 @@ export default function ChatScreen() {
   const renderMessageItem = ({ item }: { item: Message }) => {
     const isMyMessage = item.sender_id === user?.id;
     const avatarUrl = item.profiles?.avatar_public_url;
+    const isImageFile = item.file_url && /\.(jpeg|jpg|gif|png)$/i.test(item.file_url);
 
     return (
       <View style={[styles.messageRow, isMyMessage ? styles.myMessageRow : styles.otherMessageRow]}>
@@ -387,9 +470,28 @@ export default function ChatScreen() {
           {!isMyMessage && item.profiles?.full_name && (
             <Text style={styles.senderName}>{item.profiles.full_name}</Text>
           )}
-          <Text style={[styles.messageText, { color: isMyMessage ? '#FFFFFF' : '#1F2937' }]}>
-            {item.content}
-          </Text>
+          
+          {item.content && (item.content !== ((selectedFile && !selectedFile.canceled && selectedFile.assets && selectedFile.assets[0].name) || "File attached") || !item.file_url) && (
+             <Text style={[styles.messageText, { color: isMyMessage ? '#FFFFFF' : '#1F2937' }]}>
+                {item.content}
+             </Text>
+          )}
+
+          {item.file_url && (
+            isImageFile ? (
+              <TouchableOpacity onPress={() => Linking.openURL(item.file_url!)}>
+                <Image source={{ uri: item.file_url }} style={styles.attachedImage} resizeMode="contain" />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity onPress={() => Linking.openURL(item.file_url!)} style={styles.fileAttachment}>
+                <Paperclip size={16} color={isMyMessage ? '#E0E7FF' : '#4F46E5'} style={{marginRight: 6}}/>
+                <Text style={[styles.fileAttachmentText, { color: isMyMessage ? '#E0E7FF' : '#4F46E5' }]}>
+                  {item.content || 'View Attachment'}
+                </Text>
+              </TouchableOpacity>
+            )
+          )}
+
           <View style={styles.messageInfoContainer}>
             <Text style={[styles.messageTime, { color: isMyMessage ? '#E0E7FF' : '#9CA3AF' }]}>
               {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -464,7 +566,22 @@ export default function ChatScreen() {
         />
       )}
 
+      {selectedFile && selectedFile.assets && selectedFile.assets.length > 0 && (
+        <View style={styles.selectedFileContainer}>
+          <Paperclip size={16} color="#4B5563" style={{ marginRight: 8 }} />
+          <Text style={styles.selectedFileName} numberOfLines={1} ellipsizeMode="middle">
+            {selectedFile.assets[0].name}
+          </Text>
+          <TouchableOpacity onPress={() => setSelectedFile(null)} style={styles.clearFileButton}>
+            <XCircle size={20} color="#9CA3AF" />
+          </TouchableOpacity>
+        </View>
+      )}
+
       <View style={styles.inputContainer}>
+        <TouchableOpacity style={styles.attachButton} onPress={handlePickDocument}>
+          <Paperclip size={22} color="#4F46E5" />
+        </TouchableOpacity>
         <TextInput
           style={styles.input}
           value={newMessage}
@@ -473,7 +590,10 @@ export default function ChatScreen() {
           placeholderTextColor="#9CA3AF"
           multiline
         />
-        <TouchableOpacity style={[styles.sendButton, sending && styles.sendButtonDisabled]} onPress={handleSend} disabled={sending || !newMessage.trim()}>
+        <TouchableOpacity 
+          style={[styles.sendButton, (sending || (!newMessage.trim() && !selectedFile)) && styles.sendButtonDisabled]} 
+          onPress={handleSend} 
+          disabled={sending || (!newMessage.trim() && !selectedFile)}>
           {sending ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Send size={20} color="#FFFFFF" />}
         </TouchableOpacity>
       </View>
@@ -590,6 +710,10 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
   },
+  attachButton: {
+    padding: 8,
+    marginRight: 4,
+  },
   input: {
     flex: 1,
     minHeight: 40,
@@ -597,7 +721,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F4F6',
     borderRadius: 20,
     paddingHorizontal: 16,
-    paddingVertical: 10,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8, // Adjust padding for Android multiline
     fontFamily: 'Inter_400Regular',
     fontSize: 15,
     color: '#1F2937',
@@ -625,5 +749,43 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#6B7280',
     textAlign: 'center',
+  },
+  attachedImage: {
+    width: 200,
+    height: 200,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  fileAttachment: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#E0E7FF', // Light blue, adjust as needed
+    borderRadius: 8,
+    marginTop: 8,
+    maxWidth: '80%',
+  },
+  fileAttachmentText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 14,
+  },
+  selectedFileContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: '#E5E7EB', // Light gray background
+    borderTopWidth: 1,
+    borderTopColor: '#D1D5DB',
+  },
+  selectedFileName: {
+    flex: 1,
+    fontFamily: 'Inter_400Regular',
+    fontSize: 13,
+    color: '#4B5563',
+  },
+  clearFileButton: {
+    paddingLeft: 8,
   }
 });

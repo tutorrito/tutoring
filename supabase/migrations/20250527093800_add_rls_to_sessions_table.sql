@@ -6,23 +6,40 @@ ALTER TABLE public.sessions ENABLE ROW LEVEL SECURITY;
 -- Drop existing policies if they exist to avoid conflicts (optional, but safer for re-running)
 DROP POLICY IF EXISTS "Tutors can view their own sessions" ON public.sessions;
 DROP POLICY IF EXISTS "Students can view their own sessions" ON public.sessions;
+DROP POLICY IF EXISTS "Tutors can update their own sessions" ON public.sessions;
 
 -- Policy: Tutors can view all data from their own sessions
 CREATE POLICY "Tutors can view their own sessions"
 ON public.sessions
 FOR SELECT
-TO authenticated -- Or a specific 'tutor' role if you have one and prefer more granularity
+TO authenticated
 USING (
-  (SELECT auth.uid()) = tutor_id
+  (SELECT auth.uid()) = tutor_id AND
+  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'tutor'
 );
 
 -- Policy: Students can view all data from their own sessions
 CREATE POLICY "Students can view their own sessions"
 ON public.sessions
 FOR SELECT
-TO authenticated -- Or a specific 'student' role
+TO authenticated
 USING (
-  (SELECT auth.uid()) = student_id
+  (SELECT auth.uid()) = student_id AND
+  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'student'
+);
+
+-- Policy: Tutors can update their own sessions
+CREATE POLICY "Tutors can update their own sessions"
+ON public.sessions
+FOR UPDATE
+TO authenticated
+USING (
+  (SELECT auth.uid()) = tutor_id AND
+  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'tutor'
+)
+WITH CHECK (
+  (SELECT auth.uid()) = tutor_id AND
+  (SELECT role FROM public.profiles WHERE id = auth.uid()) = 'tutor'
 );
 
 -- Note: You might want to restrict the columns students can see.

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, RefreshControl, Platform, Alert } from 'react-native';
 import { router } from 'expo-router';
-import { Clock, Calendar, User, CircleAlert, Video, MessageCircle } from 'lucide-react-native';
+import { Clock, Calendar, User, CircleAlert, Video, MessageCircle, CheckCircle, XCircle } from 'lucide-react-native'; // Added CheckCircle, XCircle
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/lib/supabase';
 import ErrorScreen from '@/components/ErrorScreen';
@@ -236,6 +236,81 @@ export default function SessionsScreen() {
     }
   };
 
+  const handleMarkAsCompleted = async (sessionId: string) => {
+    if (!profile || profile.role !== 'tutor') return;
+
+    Alert.alert(
+      "Confirm Completion",
+      "Are you sure you want to mark this session as completed?",
+      [
+        { text: "No", style: "cancel" },
+        {
+          text: "Yes, Mark Completed",
+          onPress: async () => {
+            // Optimistically update UI or show loading state
+            // For simplicity, we'll refetch after update
+            setLoading(true); 
+            try {
+              const { error: updateError } = await supabase
+                .from('sessions')
+                .update({ status: 'completed' })
+                .eq('id', sessionId)
+                .eq('tutor_id', profile.id); // Ensure tutor can only update their own session
+
+              if (updateError) throw updateError;
+
+              Alert.alert("Success", "Session marked as completed.");
+              fetchSessions(false); // Refetch sessions to reflect the change
+            } catch (err) {
+              console.error('Error marking session as completed:', err);
+              Alert.alert("Error", "Could not mark session as completed. Please try again.");
+              setError('Failed to update session. Please try again.');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleCancelSession = async (sessionId: string) => {
+    if (!profile || profile.role !== 'tutor') return;
+
+    Alert.alert(
+      "Confirm Cancellation",
+      "Are you sure you want to cancel this session? This action cannot be undone.",
+      [
+        { text: "No", style: "cancel" },
+        {
+          text: "Yes, Cancel Session",
+          style: 'destructive',
+          onPress: async () => {
+            setLoading(true);
+            try {
+              const { error: updateError } = await supabase
+                .from('sessions')
+                .update({ status: 'cancelled' })
+                .eq('id', sessionId)
+                .eq('tutor_id', profile.id); // Ensure tutor can only update their own session
+
+              if (updateError) throw updateError;
+
+              Alert.alert("Success", "Session has been cancelled.");
+              fetchSessions(false); // Refetch sessions
+            } catch (err) {
+              console.error('Error cancelling session:', err);
+              Alert.alert("Error", "Could not cancel session. Please try again.");
+              setError('Failed to cancel session. Please try again.');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   if (!profile) {
     return (
       <ErrorScreen 
@@ -312,7 +387,7 @@ export default function SessionsScreen() {
                 ? "You don't have any upcoming sessions scheduled"
                 : "You haven't completed any sessions yet"}
             </Text>
-            {activeTab === 'upcoming' && (
+            {activeTab === 'upcoming' && profile?.role !== 'tutor' && (
               <TouchableOpacity 
                 style={styles.findTutorButton}
                 onPress={() => router.push('/(tabs)/search')}
@@ -376,6 +451,30 @@ export default function SessionsScreen() {
                       <MessageCircle size={20} color="#4F46E5" />
                       <Text style={styles.messageButtonText}>Message</Text>
                     </TouchableOpacity>
+                  </View>
+                )}
+
+                {/* Tutor-specific actions */}
+                {profile?.role === 'tutor' && session.tutor.id === profile.id && activeTab === 'upcoming' && (session.status === 'confirmed' || session.status === 'pending') && (
+                  <View style={styles.tutorActionsContainer}>
+                    {session.status === 'confirmed' && (
+                       <TouchableOpacity
+                        style={[styles.actionButton, styles.markCompleteButton]}
+                        onPress={() => handleMarkAsCompleted(session.id)}
+                      >
+                        <CheckCircle size={20} color="#FFFFFF" />
+                        <Text style={styles.actionButtonText}>Mark Completed</Text>
+                      </TouchableOpacity>
+                    )}
+                    {(session.status === 'pending' || session.status === 'confirmed') && (
+                      <TouchableOpacity
+                        style={[styles.actionButton, styles.cancelButton]}
+                        onPress={() => handleCancelSession(session.id)}
+                      >
+                        <XCircle size={20} color="#FFFFFF" />
+                        <Text style={styles.actionButtonText}>Cancel Session</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 )}
               </View>
@@ -576,5 +675,24 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 14,
     color: '#4F46E5',
+  },
+  tutorActionsContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+    paddingTop: 16,
+  },
+  actionButtonText: { // Generic text for new action buttons
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 14,
+    color: '#FFFFFF',
+  },
+  markCompleteButton: {
+    backgroundColor: '#10B981', // Green
+  },
+  cancelButton: {
+    backgroundColor: '#EF4444', // Red
   },
 });

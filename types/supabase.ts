@@ -61,47 +61,6 @@ export type Database = {
           },
         ]
       }
-      notifications: {
-        Row: {
-          id: string
-          user_id: string
-          type: string
-          message: string
-          metadata: Json | null
-          is_read: boolean
-          created_at: string
-          read_at: string | null
-        }
-        Insert: {
-          id?: string
-          user_id: string
-          type: string
-          message: string
-          metadata?: Json | null
-          is_read?: boolean
-          created_at?: string
-          read_at?: string | null
-        }
-        Update: {
-          id?: string
-          user_id?: string
-          type?: string
-          message?: string
-          metadata?: Json | null
-          is_read?: boolean
-          created_at?: string
-          read_at?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "notifications_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       conversations: {
         Row: {
           created_at: string
@@ -237,6 +196,7 @@ export type Database = {
           content: string
           conversation_id: string
           created_at: string
+          file_url: string | null
           id: string
           is_read: boolean | null
           sender_id: string
@@ -245,6 +205,7 @@ export type Database = {
           content: string
           conversation_id: string
           created_at?: string
+          file_url?: string | null
           id?: string
           is_read?: boolean | null
           sender_id: string
@@ -253,6 +214,7 @@ export type Database = {
           content?: string
           conversation_id?: string
           created_at?: string
+          file_url?: string | null
           id?: string
           is_read?: boolean | null
           sender_id?: string
@@ -268,6 +230,47 @@ export type Database = {
           {
             foreignKeyName: "messages_sender_id_fkey"
             columns: ["sender_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      notifications: {
+        Row: {
+          created_at: string
+          id: string
+          is_read: boolean
+          message: string
+          metadata: Json | null
+          read_at: string | null
+          type: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_read?: boolean
+          message: string
+          metadata?: Json | null
+          read_at?: string | null
+          type: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_read?: boolean
+          message?: string
+          metadata?: Json | null
+          read_at?: string | null
+          type?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_user_id_fkey"
+            columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]

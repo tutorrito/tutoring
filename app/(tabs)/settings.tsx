@@ -46,11 +46,6 @@ export default function SettingsScreen() {
           onPress: () => router.push('/(tabs)/profile'), // Navigate to the profile tab screen
         },
         {
-          icon: User, // Re-using User icon, consider a different one if available/needed
-          label: 'Edit Profile',
-          onPress: () => router.push('/profile-settings'), // Assuming this is the edit profile screen
-        },
-        {
           icon: Bell,
           label: 'Push Notifications',
           right: (
@@ -77,7 +72,7 @@ export default function SettingsScreen() {
         {
           icon: Shield,
           label: 'Privacy & Security',
-          onPress: () => router.push('/privacy-settings'),
+          onPress: () => router.push('/privacy-settings' as any),
         },
       ],
     },
@@ -87,7 +82,7 @@ export default function SettingsScreen() {
         {
           icon: HelpCircle,
           label: 'Help Center',
-          onPress: () => router.push('/help'),
+          onPress: () => router.push('/help' as any),
         },
         {
           icon: Mail,
@@ -108,13 +103,13 @@ export default function SettingsScreen() {
         {
           icon: FileText,
           label: 'Terms of Service',
-          onPress: () => router.push('/terms'),
+          onPress: () => router.push('/terms' as any),
           showExternalIcon: true,
         },
         {
           icon: Shield,
           label: 'Privacy Policy',
-          onPress: () => router.push('/privacy'),
+          onPress: () => router.push('/privacy' as any),
           showExternalIcon: true,
         },
       ],
@@ -140,18 +135,18 @@ export default function SettingsScreen() {
                     styles.menuItem,
                     itemIndex === section.items.length - 1 && styles.menuItemLast,
                   ]}
-                  onPress={item.onPress}
-                  disabled={!item.onPress && !item.right} // Disable if no onPress and no right element (like Switch)
+                  onPress={typeof item.onPress === 'function' ? item.onPress : undefined}
+                  disabled={!('onPress' in item && typeof item.onPress === 'function') && !('right' in item && item.right)} // Disable if no onPress and no right element (like Switch)
                 >
                   <View style={styles.menuItemLeft}>
                     <Icon size={20} color="#4B5563" />
                     <Text style={styles.menuItemText}>{item.label}</Text>
                   </View>
                   <View style={styles.menuItemRight}>
-                    {item.right || (
-                      item.onPress && (
+                    {('right' in item && item.right) || ( // Check for item.right before item.onPress logic
+                      (typeof item.onPress === 'function') && (
                         <>
-                          {item.showExternalIcon ? (
+                          {('showExternalIcon' in item && item.showExternalIcon) ? (
                             <ExternalLink size={16} color="#6B7280" />
                           ) : (
                             <ChevronRight size={16} color="#6B7280" />
@@ -278,4 +273,3 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
 });
-

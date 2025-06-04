@@ -86,20 +86,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         .select('image_path')
         .eq('user_id', userId)
         .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
+        .limit(1); // Remove .single()
 
-      if (imageError && imageError.code !== 'PGRST116') { // PGRST116: "Searched item not found"
+      // Adjust error handling and data processing
+      if (imageError) { 
+        // Log any error that isn't just "not found" which is expected if no avatar
+        // PGRST116 is for .single() when no rows are found. 
+        // Without .single(), an empty result isn't an error itself.
+        // We'll check for other types of errors.
+        // A 406 error might still appear here if it's a fundamental RLS or access issue.
         console.error('Error fetching avatar image from profile_images:', imageError);
         setAvatarUrl(null);
-      } else if (imageRecord && imageRecord.image_path) {
+      } else if (imageRecord && imageRecord.length > 0 && imageRecord[0].image_path) {
+        // imageRecord is now an array, take the first element
         const { data: { publicUrl } } = supabase.storage
           .from('avatars') // Bucket name
-          .getPublicUrl(imageRecord.image_path);
+          .getPublicUrl(imageRecord[0].image_path);
         setAvatarUrl(publicUrl);
         console.log('Fetched avatar URL from profile_images:', publicUrl);
       } else {
-        setAvatarUrl(null); // No image found or error handled
+        // No error, but imageRecord is null, empty, or has no image_path
+        setAvatarUrl(null); // No image found or expected "not found"
       }
 
     } catch (error) {

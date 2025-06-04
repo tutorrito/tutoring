@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Alert } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Platform, Alert, Button } from 'react-native';
+import DateTimePicker, { DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router } from 'expo-router';
 import { ArrowLeft, Plus, X } from 'lucide-react-native';
 import { useAuth } from '@/hooks/useAuth';
@@ -22,10 +23,72 @@ export default function AvailabilityScreen() {
   const { profile } = useAuth();
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
   const [unavailableDays, setUnavailableDays] = useState<UnavailableDay[]>([]);
-  const [selectedDate, setSelectedDate] = useState('');
+  const [dateForPicker, setDateForPicker] = useState(new Date()); // For the picker's internal date
+  const [selectedDate, setSelectedDate] = useState(''); // Stores date as YYYY-MM-DD string
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [reason, setReason] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+
+  const onChangeDate = (event: DateTimePickerEvent, newDate?: Date) => {
+    setShowDatePicker(Platform.OS === 'ios'); // Keep open on iOS until dismissal
+    if (newDate) {
+      setDateForPicker(newDate);
+      // Format date to YYYY-MM-DD for Supabase and display
+      const year = newDate.getFullYear();
+      const month = (newDate.getMonth() + 1).toString().padStart(2, '0');
+      const day = newDate.getDate().toString().padStart(2, '0');
+      setSelectedDate(`${year}-${month}-${day}`);
+    }
+  };
+
+  const showDatepicker = () => {
+    setShowDatePicker(true);
+  };
+
+
+  useEffect(() => {
+    const fetchUnavailableDays = async () => {
+      if (!profile?.id) {
+        // It's possible profile is not yet loaded, or user is not logged in.
+        // We might want to show a message or handle this case more gracefully.
+        // For now, if no profile.id, we can't fetch data.
+        setIsLoading(false); 
+        return;
+      }
+
+      try {
+        setIsLoading(true);
+        const { data, error } = await supabase
+          .from('tutor_availability')
+          .select('id, date, reason')
+          .eq('tutor_id', profile.id) // profile.id is now guaranteed by the check above
+          .eq('is_available', false);
+
+        if (error) throw error;
+
+        if (data) {
+          setUnavailableDays(data.map(day => ({
+            id: day.id,
+            date: day.date, 
+            reason: day.reason || '', // Ensure reason is always a string
+          })));
+        }
+      } catch (error) {
+        console.error('Error fetching unavailable days:', error);
+        Alert.alert('Error', 'Failed to load unavailable days.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchUnavailableDays();
+  }, [profile?.id]);
 
   const handleAddUnavailableDay = async () => {
+    if (!profile?.id) {
+      Alert.alert('Error', 'User profile not found. Please try again.');
+      return;
+    }
     if (!selectedDate) {
       Alert.alert('Error', 'Please select a date');
       return;
@@ -35,21 +98,28 @@ export default function AvailabilityScreen() {
       const { data, error } = await supabase
         .from('tutor_availability')
         .insert({
-          tutor_id: profile?.id,
+          tutor_id: profile.id, // profile.id is now guaranteed by the check above
           date: selectedDate,
           is_available: false,
-          reason: reason || 'Unavailable',
+          reason: reason || 'Unavailable', // Ensure reason is a string
         })
         .select()
         .single();
 
       if (error) throw error;
 
-      setUnavailableDays([...unavailableDays, {
-        id: data.id,
-        date: data.date,
-        reason: data.reason,
-      }]);
+      // Ensure data and its properties exist before using them
+      if (data && data.id && data.date) {
+        setUnavailableDays([...unavailableDays, {
+          id: data.id,
+          date: data.date,
+          reason: data.reason || '', // Ensure reason is always a string
+        }]);
+      } else {
+        // Handle case where data might not be as expected, though select().single() should return it
+        console.error('Error adding unavailable day: Inserted data is incomplete', data);
+        Alert.alert('Error', 'Failed to update availability: Incomplete data received.');
+      }
       
       setSelectedDate('');
       setReason('');
@@ -89,12 +159,21 @@ export default function AvailabilityScreen() {
         <View style={styles.card}>
           <View style={styles.inputContainer}>
             <Text style={styles.label}>Select Date</Text>
-            <TextInput
-              style={styles.input}
-              value={selectedDate}
-              onChangeText={setSelectedDate}
-              placeholder="YYYY-MM-DD"
-            />
+            <TouchableOpacity onPress={showDatepicker} style={styles.dateDisplay}>
+              <Text style={styles.dateDisplayText}>
+                {selectedDate || 'YYYY-MM-DD'}
+              </Text>
+            </TouchableOpacity>
+            {showDatePicker && (
+              <DateTimePicker
+                testID="dateTimePicker"
+                value={dateForPicker}
+                mode="date"
+                display="default"
+                onChange={onChangeDate}
+                minimumDate={new Date()} // Optional: prevent selecting past dates
+              />
+            )}
           </View>
 
           <View style={styles.inputContainer}>
@@ -120,7 +199,9 @@ export default function AvailabilityScreen() {
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Unavailable Days</Text>
-        {unavailableDays.length === 0 ? (
+        {isLoading ? (
+          <Text style={styles.loadingText}>Loading unavailable days...</Text>
+        ) : unavailableDays.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateTitle}>No Unavailable Days</Text>
             <Text style={styles.emptyStateText}>
@@ -203,6 +284,19 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1F2937',
   },
+  dateDisplay: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+    padding: 12,
+    justifyContent: 'center',
+  },
+  dateDisplayText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 16,
+    color: '#1F2937',
+  },
   reasonInput: {
     height: 80,
     textAlignVertical: 'top',
@@ -238,6 +332,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6B7280',
     textAlign: 'center',
+  },
+  loadingText: {
+    fontFamily: 'Inter_400Regular',
+    fontSize: 16,
+    color: '#6B7280',
+    textAlign: 'center',
+    paddingVertical: 20,
   },
   unavailableDaysList: {
     gap: 12,

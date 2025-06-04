@@ -276,6 +276,7 @@ export default function TutorDashboardScreen() {
         <Text style={styles.tutorName}>{profile?.full_name || 'Tutor'}</Text>
       </View>
 
+      {profile?.role === 'tutor' && (
       <View style={styles.statsContainer}>
         <View style={styles.statCard}>
           <Text style={styles.statValue}>{upcomingSessions}</Text>
@@ -290,6 +291,7 @@ export default function TutorDashboardScreen() {
           <Text style={styles.statLabel}>This Month</Text>
         </View>
       </View>
+      )}
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Quick Actions</Text>
@@ -405,12 +407,14 @@ export default function TutorDashboardScreen() {
         </View>
       )}
 
+      {profile?.role === 'tutor' && (
       <View style={styles.alertSection}>
         <AlertCircle size={20} color="#DC2626" />
         <Text style={styles.alertText}>
           Remember to update your availability regularly to ensure students can book sessions with you.
         </Text>
       </View>
+      )}
     </ScrollView>
   );
 }

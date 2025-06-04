@@ -23,8 +23,8 @@ const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   },
   global: {
     headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json'
+      'Accept': 'application/json'
+      // 'Content-Type': 'application/json' // Removed to allow service-specific Content-Types
     },
     // Configure fetch with retry behavior
     fetch: (input, init) => {

@@ -25,8 +25,7 @@ export default function TabLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color, size }) => <Home size={size} color={color} />,
+          href: null, // Remove Home from tab bar
         }}
       />
       <Tabs.Screen

@@ -18,11 +18,16 @@ import React from 'react';
 
 type Notification = Tables<'notifications'>;
 
-// Define CustomTabBarProps as 'any' to bypass all type checking for props
-type CustomTabBarProps = any;
+import { BottomTabBarProps } from '@react-navigation/bottom-tabs'; // Import standard props type
+
+// Use BottomTabBarProps for better type safety, though we'll still access parts of it.
+// For simplicity in this specific modification, we can keep CustomTabBarProps as any if preferred,
+// but BottomTabBarProps is more correct. Let's try with BottomTabBarProps.
+// If it causes issues due to specific Expo Router nuances, we can revert to 'any' for props.
+type CustomTabBarProps = BottomTabBarProps;
+
 
 const iconMap: { [key: string]: React.ElementType } = {
-  index: Home,
   search: Search,
   messages: MessageSquare,
   sessions: Calendar,
@@ -33,7 +38,7 @@ const iconMap: { [key: string]: React.ElementType } = {
 };
 
 // Use the custom props type
-export default function CustomTabBar({ state, navigation }: CustomTabBarProps) {
+export default function CustomTabBar({ state, descriptors, navigation }: CustomTabBarProps) { // Added descriptors
   const { user } = useAuth();
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -101,6 +106,24 @@ export default function CustomTabBar({ state, navigation }: CustomTabBarProps) {
     <View style={styles.container}>
       <View style={styles.tabBar}>
         {state.routes.map((route: MappedRoute, index: number) => {
+          const descriptor = descriptors[route.key];
+          const options = descriptor.options;
+
+          // Skip rendering the 'index' tab
+          if (route.name === 'index') {
+            return null;
+          }
+
+          // Skip rendering the 'profile' tab
+          if (route.name === 'profile') {
+            return null;
+          }
+
+          // Expo Router specific: hide tab if href is null
+          if ((options as any).href === null) {
+            return null;
+          }
+
           const isFocused = state.index === index;
           const Icon = iconMap[route.name] || User; // Fallback to User icon
 
