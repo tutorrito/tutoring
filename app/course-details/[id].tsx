@@ -1,6 +1,9 @@
-import { View, Text, StyleSheet, ScrollView, Image, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Image, ActivityIndicator, Alert, TouchableOpacity } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
+import { ArrowLeft } from 'lucide-react-native'; // For back button
+import CustomTabBar from '../../components/CustomTabBar'; // Path seems correct
+import { useAuth } from '@/hooks/useAuth'; // For role-based tab visibility
 import { supabase } from '@/lib/supabase';
 import { FontAwesome } from '@expo/vector-icons'; // For icons
 import { Button } from 'react-native-elements'; // For a nicer button
@@ -32,6 +35,7 @@ interface CourseAvailability {
 export default function CourseDetailsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { profile } = useAuth(); // Get profile for role
   const [course, setCourse] = useState<CourseDetails | null>(null);
   const [availability, setAvailability] = useState<CourseAvailability[]>([]);
   const [loading, setLoading] = useState(true);
@@ -163,9 +167,19 @@ export default function CourseDetailsScreen() {
   }
 
   return (
-    <>
-      <Stack.Screen options={{ title: course.title || 'Course Details' }} />
-      <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
+    <View style={{ flex: 1 }}>
+      <Stack.Screen options={{ 
+        title: course.title || 'Course Details', 
+        headerLeft: () => (
+          <TouchableOpacity onPress={() => router.back()} style={{ marginLeft: 10, padding: 5}}>
+            <ArrowLeft size={24} color="#007AFF" />
+          </TouchableOpacity>
+        )
+      }} />
+      <ScrollView 
+        style={styles.container} 
+        contentContainerStyle={[styles.contentContainer, { paddingBottom: (styles.contentContainer.paddingBottom || 30) + 70 }]} // Add padding for tab bar
+      >
         {course.cover_image_url ? (
           <Image source={{ uri: course.cover_image_url }} style={styles.coverImage} resizeMode="cover" />
         ) : (
@@ -226,9 +240,64 @@ export default function CourseDetailsScreen() {
           />
         </View>
       </ScrollView>
-    </>
+      <CustomTabBar
+        state={getMockTabState(profile?.role)}
+        descriptors={getMockTabDescriptors(profile?.role)}
+        navigation={{
+          navigate: (name: string, params?: any) => router.push(`/(tabs)/${name}` as any), // Adjust path as needed
+          emit: ({ type, target, canPreventDefault }) => ({ defaultPrevented: false } as any), // Mock emit
+          // Add other navigation methods if CustomTabBar uses them, e.g., dispatch, goBack, etc.
+          // For simplicity, only providing navigate and emit.
+        }}
+      />
+    </View>
   );
 }
+
+// Helper functions to generate mock state and descriptors
+const getMockTabRoutes = (role?: string) => {
+  const routes = [
+    { name: 'index', key: 'index', params: {} }, // Will be filtered by CustomTabBar due to options.href === null
+    { name: 'profile', key: 'profile', params: {} }, // Will be filtered
+    { name: 'search', key: 'search', params: {} },
+    { name: 'messages', key: 'messages', params: {} },
+    { name: 'notifications', key: 'notifications', params: {} },
+    { name: 'settings', key: 'settings', params: {} },
+  ];
+  if (role === 'student' || !role) { // Default to student if role is undefined
+    routes.splice(4, 0, { name: 'sessions', key: 'sessions', params: {} });
+  }
+  if (role === 'tutor') {
+    routes.splice(4, 0, { name: 'tutor-dashboard', key: 'tutor-dashboard', params: {} });
+  }
+  return routes;
+};
+
+const getMockTabState = (role?: string) => {
+  return {
+    index: -1, // No tab is active on this screen
+    routes: getMockTabRoutes(role),
+    // Add other state properties if necessary, e.g., routeNames, history, type, stale
+    routeNames: getMockTabRoutes(role).map(r => r.name),
+    history: [],
+    type: 'tab' as 'tab', // Explicitly type as 'tab'
+    stale: false,
+  };
+};
+
+const getMockTabDescriptors = (role?: string) => {
+  const descriptors: any = {};
+  getMockTabRoutes(role).forEach(route => {
+    descriptors[route.key] = {
+      options: {
+        href: (route.name === 'index' || route.name === 'profile') ? null : undefined,
+        // Add other options if CustomTabBar uses them
+      },
+      // Add render, navigation, etc. if CustomTabBar uses them from descriptors
+    };
+  });
+  return descriptors;
+};
 
 // Helper function to format TIME string (e.g., "14:00:00") to a displayable format (e.g., "2:00 PM")
 const formatTime = (timeString: string) => {
@@ -366,4 +435,5 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 18,
   },
+  // Styles for contentContainer might need adjustment for CustomTabBar later
 });

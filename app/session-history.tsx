@@ -5,20 +5,19 @@ import { ArrowLeft, Clock, MapPin, CircleAlert as AlertCircle, Calendar, User } 
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/lib/supabase';
 
+type ProfileInfo = {
+  id: string;
+  full_name: string | null;
+};
+
 type Session = {
   id: string;
-  subject: {
-    name: string;
-  };
-  tutor: {
-    full_name: string;
-  };
-  student: {
-    full_name: string;
-  };
+  subject: { name: string | null } | null;
+  tutor: ProfileInfo | null;
+  student: ProfileInfo | null;
   start_time: string;
   duration: number;
-  status: 'pending' | 'confirmed' | 'completed' | 'cancelled';
+  status: 'pending' | 'confirmed' | 'completed' | 'cancelled' | string | null;
 };
 
 type TabType = 'upcoming' | 'completed';
@@ -47,8 +46,8 @@ export default function SessionHistoryScreen() {
         .select(`
           id,
           subject:subject_id(name),
-          tutor:tutor_id(full_name),
-          student:student_id(full_name),
+          tutor:tutor_id(id, full_name),
+          student:student_id(id, full_name),
           start_time,
           duration,
           status
@@ -70,7 +69,7 @@ export default function SessionHistoryScreen() {
       const { data, error: fetchError } = await query;
 
       if (fetchError) throw fetchError;
-      setSessions(data || []);
+      setSessions((data as unknown as Session[]) || []);
     } catch (err) {
       console.error('Error fetching sessions:', err);
       setError('Failed to load sessions. Please try again.');
@@ -194,15 +193,15 @@ export default function SessionHistoryScreen() {
         >
           {sessions.map((session) => {
             const { date, time } = formatDateTime(session.start_time);
-            const isStudent = session.student.full_name === profile.full_name;
+            const isStudent = session.student?.full_name === profile.full_name;
 
             return (
               <View key={session.id} style={styles.sessionCard}>
                 <View style={styles.sessionHeader}>
-                  <Text style={styles.subjectName}>{session.subject.name}</Text>
+                  <Text style={styles.subjectName}>{session.subject?.name || 'N/A'}</Text>
                   <View style={[styles.statusBadge, { backgroundColor: getStatusColor(session.status) }]}>
                     <Text style={styles.statusText}>
-                      {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
+                      {session.status ? session.status.charAt(0).toUpperCase() + session.status.slice(1) : 'N/A'}
                     </Text>
                   </View>
                 </View>
@@ -211,7 +210,7 @@ export default function SessionHistoryScreen() {
                   <View style={styles.infoRow}>
                     <User size={16} color="#6B7280" />
                     <Text style={styles.infoText}>
-                      {isStudent ? `Tutor: ${session.tutor.full_name}` : `Student: ${session.student.full_name}`}
+                      {isStudent ? `Tutor: ${session.tutor?.full_name || 'N/A'}` : `Student: ${session.student?.full_name || 'N/A'}`}
                     </Text>
                   </View>
 
@@ -228,11 +227,7 @@ export default function SessionHistoryScreen() {
                   </View>
                 </View>
 
-                {session.status === 'confirmed' && activeTab === 'upcoming' && (
-                  <TouchableOpacity style={styles.joinButton}>
-                    <Text style={styles.joinButtonText}>Join Session</Text>
-                  </TouchableOpacity>
-                )}
+                {/* Empty block removed, was: {session.status === 'confirmed' && activeTab === 'upcoming' && ()} */}
               </View>
             );
           })}

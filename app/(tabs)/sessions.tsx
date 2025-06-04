@@ -437,14 +437,6 @@ export default function SessionsScreen() {
                 {session.status === 'confirmed' && activeTab === 'upcoming' && (
                   <View style={styles.actionButtons}>
                     <TouchableOpacity 
-                      style={[styles.actionButton, styles.joinButton]}
-                      onPress={() => handleJoinSession(session.id)}
-                    >
-                      <Video size={20} color="#FFFFFF" />
-                      <Text style={styles.joinButtonText}>Join Session</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity 
                       style={[styles.actionButton, styles.messageButton]}
                       onPress={() => handleContactParticipant(session.id)} // Pass session.id
                     >
